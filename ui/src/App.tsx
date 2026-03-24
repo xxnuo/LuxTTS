@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react"
+import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -26,8 +26,19 @@ import {
   listPrompts,
   generateSpeech,
   getStatus,
+  listSamples,
+  uploadSample,
   type TTSParams,
 } from "@/lib/api"
+import {
+  LocaleContext,
+  useT,
+  useLocale,
+  detectLocale,
+  SAMPLE_TEXTS,
+  SAMPLE_VOICE_SCRIPTS,
+  type Locale,
+} from "@/lib/i18n"
 import {
   Microphone,
   Play,
@@ -40,10 +51,20 @@ import {
   Lightning,
   GearSix,
   X,
+  Sun,
+  Moon,
+  Translate,
+  MusicNotes,
 } from "@phosphor-icons/react"
 
 interface PromptInfo {
   id: string
+  name: string
+  audioUrl?: string
+}
+
+interface SampleInfo {
+  file: string
   name: string
 }
 
@@ -53,7 +74,59 @@ interface GenerationResult {
   text: string
 }
 
+type Theme = "light" | "dark"
+
+function detectTheme(): Theme {
+  const stored = localStorage.getItem("theme")
+  if (stored === "light" || stored === "dark") return stored
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light"
+}
+
 export default function App() {
+  const [locale, setLocaleState] = useState<Locale>(detectLocale)
+  const [theme, setThemeState] = useState<Theme>(detectTheme)
+
+  const setLocale = useCallback((l: Locale) => {
+    setLocaleState(l)
+    localStorage.setItem("locale", l)
+  }, [])
+
+  const setTheme = useCallback((t: Theme) => {
+    setThemeState(t)
+    localStorage.setItem("theme", t)
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark")
+  }, [theme])
+
+  const localeCtx = useMemo(
+    () => ({ locale, setLocale }),
+    [locale, setLocale],
+  )
+
+  return (
+    <LocaleContext.Provider value={localeCtx}>
+      <AppContent
+        theme={theme}
+        onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+      />
+    </LocaleContext.Provider>
+  )
+}
+
+function AppContent({
+  theme,
+  onToggleTheme,
+}: {
+  theme: Theme
+  onToggleTheme: () => void
+}) {
+  const t = useT()
+  const { locale, setLocale } = useLocale()
+
   const [status, setStatus] = useState<{
     ready: boolean
     device: string
@@ -68,6 +141,11 @@ export default function App() {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [error, setError] = useState("")
+  const [samples, setSamples] = useState<SampleInfo[]>([])
+  const [loadingSample, setLoadingSample] = useState("")
+  const [previewAudio, setPreviewAudio] = useState<string | null>(null)
+  const [previewPlaying, setPreviewPlaying] = useState(false)
+  const [promptText, setPromptText] = useState("")
 
   const [numSteps, setNumSteps] = useState(4)
   const [guidanceScale, setGuidanceScale] = useState(3.0)
@@ -79,11 +157,15 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const audioRefs = useRef<Map<number, HTMLAudioElement>>(new Map())
+  const previewRef = useRef<HTMLAudioElement>(null)
 
   const refreshPrompts = useCallback(async () => {
     try {
       const list = await listPrompts()
-      setPrompts(list)
+      setPrompts((prev) => {
+        const audioMap = new Map(prev.map((p) => [p.id, p.audioUrl]))
+        return list.map((p) => ({ ...p, audioUrl: audioMap.get(p.id) }))
+      })
       if (list.length > 0 && !list.find((p) => p.id === selectedPrompt)) {
         setSelectedPrompt(list[0].id)
       }
@@ -101,32 +183,66 @@ export default function App() {
     }
   }, [])
 
+  const refreshSamples = useCallback(async () => {
+    try {
+      const list = await listSamples()
+      setSamples(list)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   useEffect(() => {
     refreshStatus()
     refreshPrompts()
+    refreshSamples()
     const iv = setInterval(refreshStatus, 5000)
     return () => clearInterval(iv)
-  }, [refreshStatus, refreshPrompts])
+  }, [refreshStatus, refreshPrompts, refreshSamples])
 
   const handleFileUpload = async (file: File) => {
     if (!file.type.startsWith("audio/")) {
-      setError("Please upload an audio file (WAV/MP3)")
+      setError(t("uploadError"))
       return
     }
     setUploading(true)
     setError("")
     try {
+      const audioUrl = URL.createObjectURL(file)
       const result = await uploadPrompt(file, {
         duration: refDuration,
         rms: promptRms,
         name: file.name.replace(/\.[^.]+$/, ""),
+        prompt_text: promptText,
       })
-      await refreshPrompts()
+      setPrompts((prev) => [...prev, { ...result, audioUrl }])
       setSelectedPrompt(result.id)
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed")
+      setError(e instanceof Error ? e.message : t("uploadFailed"))
     } finally {
       setUploading(false)
+    }
+  }
+
+  const handleSampleSelect = async (sample: SampleInfo) => {
+    setLoadingSample(sample.file)
+    setError("")
+    const script = SAMPLE_VOICE_SCRIPTS[sample.file] || ""
+    setPromptText(script)
+    try {
+      const result = await uploadSample(sample.file, {
+        duration: refDuration,
+        rms: promptRms,
+        name: sample.name,
+        prompt_text: script,
+      })
+      const audioUrl = `/api/samples/audio/${sample.file}`
+      setPrompts((prev) => [...prev, { ...result, audioUrl }])
+      setSelectedPrompt(result.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("uploadFailed"))
+    } finally {
+      setLoadingSample("")
     }
   }
 
@@ -139,8 +255,10 @@ export default function App() {
 
   const handleDeletePrompt = async (id: string) => {
     try {
+      const p = prompts.find((x) => x.id === id)
+      if (p?.audioUrl?.startsWith("blob:")) URL.revokeObjectURL(p.audioUrl)
       await deletePrompt(id)
-      await refreshPrompts()
+      setPrompts((prev) => prev.filter((x) => x.id !== id))
       if (selectedPrompt === id) setSelectedPrompt("")
     } catch {
       /* ignore */
@@ -169,7 +287,7 @@ export default function App() {
         ...prev,
       ])
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Generation failed")
+      setError(e instanceof Error ? e.message : t("genFailed"))
     } finally {
       setGenerating(false)
     }
@@ -178,6 +296,7 @@ export default function App() {
   const togglePlay = (idx: number) => {
     const audio = audioRefs.current.get(idx)
     if (!audio) return
+    stopPreview()
     if (playingIdx === idx) {
       audio.pause()
       setPlayingIdx(null)
@@ -200,17 +319,82 @@ export default function App() {
     setResults((prev) => prev.filter((_, i) => i !== idx))
   }
 
+  const playPreview = (url: string) => {
+    if (playingIdx !== null) {
+      audioRefs.current.get(playingIdx)?.pause()
+      setPlayingIdx(null)
+    }
+    if (previewAudio === url && previewPlaying) {
+      stopPreview()
+      return
+    }
+    setPreviewAudio(url)
+    setPreviewPlaying(true)
+    const el = previewRef.current
+    if (el) {
+      el.src = url
+      el.currentTime = 0
+      el.play()
+      el.onended = () => setPreviewPlaying(false)
+    }
+  }
+
+  const stopPreview = () => {
+    previewRef.current?.pause()
+    setPreviewPlaying(false)
+  }
+
+  const playSamplePreview = (file: string) => {
+    playPreview(`/api/samples/audio/${file}`)
+  }
+
+  const playPromptPreview = (id: string) => {
+    const p = prompts.find((x) => x.id === id)
+    if (p?.audioUrl) playPreview(p.audioUrl)
+  }
+
+  const selectedPromptObj = prompts.find((p) => p.id === selectedPrompt)
+
   const ready = status?.ready ?? false
+
+  const textCount = useMemo(() => {
+    if (!text.trim()) return ""
+    const isChinese = /[\u4e00-\u9fff]/.test(text)
+    if (isChinese) return `${text.trim().length} ${t("chars")}`
+    return `${text.trim().split(/\s+/).length} ${t("words")}`
+  }, [text, t])
 
   return (
     <div className="flex min-h-svh flex-col bg-background">
+      <audio ref={previewRef} className="hidden" preload="auto" />
+
       <header className="sticky top-0 z-10 border-b bg-background/80 px-6 py-3 backdrop-blur-sm">
         <div className="mx-auto flex max-w-4xl items-center justify-between">
           <div className="flex items-center gap-3">
             <Waveform className="size-5 text-primary" weight="duotone" />
-            <h1 className="text-sm font-semibold tracking-tight">LuxTTS</h1>
+            <h1 className="text-sm font-semibold tracking-tight">{t("title")}</h1>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setLocale(locale === "en" ? "zh" : "en")}
+              title={t("language")}
+            >
+              <Translate className="size-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onToggleTheme}
+              title={t("theme")}
+            >
+              {theme === "dark" ? (
+                <Sun className="size-3.5" />
+              ) : (
+                <Moon className="size-3.5" />
+              )}
+            </Button>
             <Badge
               variant={ready ? "default" : "outline"}
               className={
@@ -222,7 +406,7 @@ export default function App() {
               <span
                 className={`mr-1 inline-block size-1.5 rounded-full ${ready ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground"}`}
               />
-              {ready ? `Ready · ${status?.device}` : "Connecting..."}
+              {ready ? `${t("ready")} · ${status?.device}` : t("connecting")}
             </Badge>
           </div>
         </div>
@@ -235,11 +419,9 @@ export default function App() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Microphone className="size-4" weight="duotone" />
-                  Voice Prompt
+                  {t("voicePrompt")}
                 </CardTitle>
-                <CardDescription>
-                  Upload a reference audio for voice cloning (min 3s)
-                </CardDescription>
+                <CardDescription>{t("voicePromptDesc")}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div
@@ -273,9 +455,7 @@ export default function App() {
                     />
                   )}
                   <span className="text-xs text-muted-foreground">
-                    {uploading
-                      ? "Encoding prompt..."
-                      : "Drop audio here or click to browse"}
+                    {uploading ? t("encodingPrompt") : t("dropAudio")}
                   </span>
                   <input
                     ref={fileInputRef}
@@ -290,16 +470,58 @@ export default function App() {
                   />
                 </div>
 
+                {samples.length > 0 && (
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-1.5">
+                      <MusicNotes className="size-3.5" weight="duotone" />
+                      {t("sampleVoices")}
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      {samples.map((s) => (
+                        <div key={s.file} className="flex items-center gap-0.5">
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              playSamplePreview(s.file)
+                            }}
+                            className="size-7"
+                          >
+                            {previewPlaying && previewAudio === `/api/samples/audio/${s.file}` ? (
+                              <Pause className="size-3" weight="fill" />
+                            ) : (
+                              <Play className="size-3" weight="fill" />
+                            )}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={!!loadingSample || uploading}
+                            onClick={() => handleSampleSelect(s)}
+                            className="text-xs"
+                          >
+                            {loadingSample === s.file && (
+                              <Spinner className="mr-1.5 size-3" />
+                            )}
+                            {s.name}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {prompts.length > 0 && (
                   <div className="space-y-2">
-                    <Label>Select Prompt</Label>
+                    <Label>{t("selectPrompt")}</Label>
                     <div className="flex items-center gap-2">
                       <Select
                         value={selectedPrompt}
                         onValueChange={setSelectedPrompt}
                       >
                         <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Choose a voice prompt" />
+                          <SelectValue placeholder={t("choosePlaceholder")} />
                         </SelectTrigger>
                         <SelectContent>
                           {prompts.map((p) => (
@@ -309,6 +531,19 @@ export default function App() {
                           ))}
                         </SelectContent>
                       </Select>
+                      {selectedPrompt && selectedPromptObj?.audioUrl && (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => playPromptPreview(selectedPrompt)}
+                        >
+                          {previewPlaying && previewAudio === selectedPromptObj.audioUrl ? (
+                            <Pause className="size-3.5" weight="fill" />
+                          ) : (
+                            <Play className="size-3.5" weight="fill" />
+                          )}
+                        </Button>
+                      )}
                       {selectedPrompt && (
                         <Button
                           variant="ghost"
@@ -319,6 +554,15 @@ export default function App() {
                         </Button>
                       )}
                     </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">{t("promptTextLabel")}</Label>
+                      <Textarea
+                        placeholder={t("promptTextPlaceholder")}
+                        className="min-h-16 resize-none text-xs"
+                        value={promptText}
+                        onChange={(e) => setPromptText(e.target.value)}
+                      />
+                    </div>
                   </div>
                 )}
               </CardContent>
@@ -328,12 +572,12 @@ export default function App() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <SpeakerHigh className="size-4" weight="duotone" />
-                  Text to Speech
+                  {t("textToSpeech")}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <Textarea
-                  placeholder="Enter text to synthesize..."
+                  placeholder={t("textPlaceholder")}
                   className="min-h-28 resize-none"
                   value={text}
                   onChange={(e) => setText(e.target.value)}
@@ -344,10 +588,25 @@ export default function App() {
                     }
                   }}
                 />
+
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground">{t("sampleTexts")}</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {SAMPLE_TEXTS[locale].map((sample, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className="rounded-sm border border-muted-foreground/15 bg-muted/40 px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        onClick={() => setText(sample)}
+                      >
+                        {sample.length > 28 ? sample.slice(0, 28) + "..." : sample}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">
-                    {text.length > 0 ? `${text.trim().split(/\s+/).length} words` : ""}
-                  </span>
+                  <span className="text-xs text-muted-foreground">{textCount}</span>
                   <Button
                     onClick={handleGenerate}
                     disabled={
@@ -360,7 +619,7 @@ export default function App() {
                     ) : (
                       <Lightning className="size-3.5" weight="fill" />
                     )}
-                    {generating ? "Generating..." : "Generate"}
+                    {generating ? t("generating") : t("generate")}
                   </Button>
                 </div>
               </CardContent>
@@ -371,13 +630,13 @@ export default function App() {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Waveform className="size-4" weight="duotone" />
-                    Results
+                    {t("results")}
                     <Badge variant="secondary" className="ml-auto">
                       {results.length}
                     </Badge>
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-2">
+                <CardContent className="max-h-80 space-y-2 overflow-y-auto">
                   {results.map((r, i) => (
                     <div
                       key={r.url}
@@ -396,7 +655,7 @@ export default function App() {
                         )}
                       </Button>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs">{r.text}</p>
+                        <p className="line-clamp-2 text-xs leading-relaxed">{r.text}</p>
                         {r.time !== null && (
                           <span className="text-[10px] text-muted-foreground">
                             {r.time.toFixed(2)}s
@@ -443,12 +702,12 @@ export default function App() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <GearSix className="size-4" weight="duotone" />
-                  Parameters
+                  {t("parameters")}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-5">
                 <ParamSlider
-                  label="Steps"
+                  label={t("steps")}
                   value={numSteps}
                   min={1}
                   max={16}
@@ -464,7 +723,7 @@ export default function App() {
                   onChange={setTShift}
                 />
                 <ParamSlider
-                  label="Speed"
+                  label={t("speed")}
                   value={speed}
                   min={0.5}
                   max={2.0}
@@ -472,7 +731,7 @@ export default function App() {
                   onChange={setSpeed}
                 />
                 <ParamSlider
-                  label="Ref Duration"
+                  label={t("refDuration")}
                   value={refDuration}
                   min={1}
                   max={30}
@@ -483,7 +742,7 @@ export default function App() {
 
                 <div className="flex items-center justify-between">
                   <Label htmlFor="smooth-switch" className="text-xs">
-                    Smooth Mode
+                    {t("smoothMode")}
                   </Label>
                   <Switch
                     id="smooth-switch"
@@ -498,13 +757,13 @@ export default function App() {
                   className="w-full text-left text-xs text-muted-foreground hover:text-foreground transition-colors"
                   onClick={() => setShowAdvanced(!showAdvanced)}
                 >
-                  {showAdvanced ? "- Hide" : "+ Show"} advanced
+                  {showAdvanced ? t("hideAdvanced") : t("showAdvanced")}
                 </button>
 
                 {showAdvanced && (
                   <div className="space-y-5 border-t pt-4">
                     <ParamSlider
-                      label="Guidance Scale"
+                      label={t("guidanceScale")}
                       value={guidanceScale}
                       min={1.0}
                       max={10.0}
@@ -512,7 +771,7 @@ export default function App() {
                       onChange={setGuidanceScale}
                     />
                     <ParamSlider
-                      label="Prompt RMS"
+                      label={t("promptRms")}
                       value={promptRms}
                       min={0.001}
                       max={0.1}
@@ -534,7 +793,7 @@ export default function App() {
               className="ml-2 underline"
               onClick={() => setError("")}
             >
-              dismiss
+              {t("dismiss")}
             </button>
           </div>
         )}

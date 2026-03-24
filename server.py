@@ -48,7 +48,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+SAMPLES_DIR = Path(__file__).parent / "samples"
 ui_dist = Path(__file__).parent / "ui" / "dist"
+
+if SAMPLES_DIR.is_dir():
+    app.mount("/api/samples/audio", StaticFiles(directory=str(SAMPLES_DIR)), name="samples_audio")
 if ui_dist.is_dir():
     app.mount("/ui", StaticFiles(directory=str(ui_dist), html=True), name="ui")
 
@@ -68,6 +72,7 @@ async def upload_prompt(
     duration: float = Form(5.0),
     rms: float = Form(0.01),
     name: str = Form(""),
+    prompt_text: str = Form(...),
 ):
     if tts is None:
         raise HTTPException(503, "Model not loaded")
@@ -80,7 +85,7 @@ async def upload_prompt(
         tmp.flush()
         tmp.close()
 
-        encoded = tts.encode_prompt(tmp.name, duration=duration, rms=rms)
+        encoded = tts.encode_prompt(tmp.name, duration=duration, rms=rms, prompt_text=prompt_text)
         prompt_id = uuid.uuid4().hex[:12]
         label = name.strip() or file.filename or prompt_id
         prompts[prompt_id] = {"encoded": encoded, "name": label}
@@ -144,3 +149,38 @@ async def text_to_speech(
             "Content-Disposition": "attachment; filename=output.wav",
         },
     )
+
+
+
+
+@app.get("/api/samples")
+async def list_samples():
+    if not SAMPLES_DIR.is_dir():
+        return []
+    exts = {".wav", ".mp3", ".flac", ".ogg"}
+    items = []
+    for f in sorted(SAMPLES_DIR.iterdir()):
+        if f.suffix.lower() in exts and f.is_file():
+            items.append({"file": f.name, "name": f.stem.replace("_", " ").title()})
+    return items
+
+
+@app.post("/api/prompt/sample")
+async def upload_sample(
+    file: str = Form(...),
+    duration: float = Form(5.0),
+    rms: float = Form(0.01),
+    name: str = Form(""),
+    prompt_text: str = Form(...),
+):
+    if tts is None:
+        raise HTTPException(503, "Model not loaded")
+    path = SAMPLES_DIR / file
+    if not path.is_file() or not path.resolve().is_relative_to(SAMPLES_DIR.resolve()):
+        raise HTTPException(404, "Sample not found")
+    encoded = tts.encode_prompt(str(path), duration=duration, rms=rms, prompt_text=prompt_text)
+    prompt_id = uuid.uuid4().hex[:12]
+    label = name.strip() or path.stem.replace("_", " ").title()
+    prompts[prompt_id] = {"encoded": encoded, "name": label}
+    return {"id": prompt_id, "name": label}
+

@@ -44,11 +44,14 @@ class LuxTTSConfig:
 
 
 @torch.inference_mode
-def process_audio(audio, transcriber, tokenizer, feature_extractor, device, target_rms=0.1, duration=4, feat_scale=0.1):
+def process_audio(audio, transcriber, tokenizer, feature_extractor, device, target_rms=0.1, duration=4, feat_scale=0.1, prompt_text=None):
     prompt_wav, sr = librosa.load(audio, sr=24000, duration=duration)
-    prompt_wav2, sr = librosa.load(audio, sr=16000, duration=duration)
-    prompt_text = transcriber(prompt_wav2)["text"]
-    print(prompt_text)
+    if not prompt_text or not prompt_text.strip():
+        if transcriber is not None:
+            prompt_wav2, sr = librosa.load(audio, sr=16000, duration=duration)
+            prompt_text = transcriber(prompt_wav2)["text"]
+        else:
+            raise ValueError("prompt_text is required")
 
     prompt_wav = torch.from_numpy(prompt_wav).unsqueeze(0)
     prompt_wav, prompt_rms = rms_norm(prompt_wav, target_rms)
@@ -99,7 +102,7 @@ def load_models_gpu(model_path=None, device="cuda"):
     model_ckpt = f"{model_path}/model.pt"
     model_config = f"{model_path}/config.json"
 
-    transcriber = pipeline("automatic-speech-recognition", model="openai/whisper-base", device=device)
+    transcriber = None
     tokenizer = EmiliaTokenizer(token_file=token_file)
     tokenizer_config = {"vocab_size": tokenizer.vocab_size, "pad_id": tokenizer.pad_id}
 
@@ -135,7 +138,7 @@ def load_models_cpu(model_path = None, num_thread=2):
     fm_decoder_path = f"{model_path}/fm_decoder.onnx"
     model_config  = f"{model_path}/config.json"
 
-    transcriber = pipeline("automatic-speech-recognition", model="openai/whisper-tiny", device='cpu')
+    transcriber = None
 
     tokenizer = EmiliaTokenizer(token_file=token_file)
     tokenizer_config = {"vocab_size": tokenizer.vocab_size, "pad_id": tokenizer.pad_id}
