@@ -61,6 +61,7 @@ interface PromptInfo {
   id: string
   name: string
   audioUrl?: string
+  builtin?: boolean
 }
 
 interface SampleInfo {
@@ -130,6 +131,7 @@ function AppContent({
   const [status, setStatus] = useState<{
     ready: boolean
     device: string
+    voices: string[]
   } | null>(null)
   const [prompts, setPrompts] = useState<PromptInfo[]>([])
   const [selectedPrompt, setSelectedPrompt] = useState("")
@@ -162,21 +164,33 @@ function AppContent({
     try {
       const list = await listPrompts()
       setPrompts((prev) => {
+        const builtins = prev.filter((p) => p.builtin)
         const audioMap = new Map(prev.map((p) => [p.id, p.audioUrl]))
-        return list.map((p) => ({ ...p, audioUrl: audioMap.get(p.id) }))
+        const uploaded = list.map((p) => ({ ...p, audioUrl: audioMap.get(p.id) }))
+        return [...builtins, ...uploaded]
       })
-      if (list.length > 0 && !list.find((p) => p.id === selectedPrompt)) {
-        setSelectedPrompt(list[0].id)
-      }
     } catch {
       /* ignore */
     }
-  }, [selectedPrompt])
+  }, [])
 
   const refreshStatus = useCallback(async () => {
     try {
       const s = await getStatus()
       setStatus(s)
+      if (s.voices?.length > 0) {
+        setPrompts((prev) => {
+          const nonBuiltin = prev.filter((p) => !p.builtin)
+          const builtins: PromptInfo[] = s.voices.map((v) => ({
+            id: v,
+            name: v.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+            audioUrl: `/api/samples/audio/${v}.wav`,
+            builtin: true,
+          }))
+          return [...builtins, ...nonBuiltin]
+        })
+        setSelectedPrompt((prev) => prev || s.voices[0])
+      }
     } catch {
       setStatus(null)
     }
@@ -223,10 +237,18 @@ function AppContent({
   }
 
   const handleSampleSelect = async (sample: SampleInfo) => {
-    setLoadingSample(sample.file)
-    setError("")
+    const voiceName = sample.file.replace(/\.[^.]+$/, "")
+    const builtin = prompts.find((p) => p.builtin && p.id === voiceName)
     const script = SAMPLE_VOICE_SCRIPTS[sample.file] || ""
     setPromptText(script)
+
+    if (builtin) {
+      setSelectedPrompt(builtin.id)
+      return
+    }
+
+    setLoadingSample(sample.file)
+    setError("")
     try {
       const result = await uploadSample(sample.file, {
         rms: promptRms,
@@ -408,8 +430,8 @@ function AppContent({
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-6">
-        <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-6">
+        <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
           <div className="flex flex-col gap-6">
             <Card>
               <CardHeader>
@@ -430,10 +452,9 @@ function AppContent({
                   />
                 </div>
 
-                <div
-                  role="button"
-                  tabIndex={0}
-                  className={`relative flex cursor-pointer flex-col items-center justify-center gap-2 border-2 border-dashed p-8 transition-colors ${
+                <button
+                  type="button"
+                  className={`relative flex w-full cursor-pointer flex-col items-center justify-center gap-2 border-2 border-dashed p-6 transition-colors ${
                     dragOver
                       ? "border-primary bg-primary/5"
                       : "border-muted-foreground/20 hover:border-muted-foreground/40"
@@ -445,12 +466,6 @@ function AppContent({
                   onDragLeave={() => setDragOver(false)}
                   onDrop={handleDrop}
                   onClick={() => fileInputRef.current?.click()}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault()
-                      fileInputRef.current?.click()
-                    }
-                  }}
                 >
                   {uploading ? (
                     <Spinner className="size-6" />
@@ -474,7 +489,7 @@ function AppContent({
                       e.target.value = ""
                     }}
                   />
-                </div>
+                </button>
 
                 {samples.length > 0 && (
                   <div className="space-y-2">
@@ -550,7 +565,7 @@ function AppContent({
                           )}
                         </Button>
                       )}
-                      {selectedPrompt && (
+                      {selectedPrompt && !selectedPromptObj?.builtin && (
                         <Button
                           variant="ghost"
                           size="icon-sm"
@@ -591,7 +606,7 @@ function AppContent({
                   <div className="flex flex-wrap gap-1.5">
                     {SAMPLE_TEXTS[locale].map((sample, i) => (
                       <button
-                        key={i}
+                        key={`sample-${locale}-${i}`}
                         type="button"
                         className="rounded-sm border border-muted-foreground/15 bg-muted/40 px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                         onClick={() => setText(sample)}
@@ -622,79 +637,87 @@ function AppContent({
               </CardContent>
             </Card>
 
-            {results.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Waveform className="size-4" weight="duotone" />
-                    {t("results")}
+           </div>
+
+          <div className="flex flex-col gap-6 lg:sticky lg:top-16 lg:self-start">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Waveform className="size-4" weight="duotone" />
+                  {t("results")}
+                  {results.length > 0 && (
                     <Badge variant="secondary" className="ml-auto">
                       {results.length}
                     </Badge>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="max-h-80 space-y-2 overflow-y-auto">
-                  {results.map((r, i) => (
-                    <div
-                      key={r.url}
-                      className="group flex items-center gap-3 border p-3 transition-colors hover:bg-muted/30"
-                    >
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => togglePlay(i)}
-                        className="shrink-0"
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {results.length === 0 ? (
+                  <p className="py-8 text-center text-xs text-muted-foreground">
+                    {t("noResults")}
+                  </p>
+                ) : (
+                  <div className="max-h-[50vh] space-y-2 overflow-y-auto">
+                    {results.map((r, i) => (
+                      <div
+                        key={r.url}
+                        className="group flex items-center gap-3 border p-3 transition-colors hover:bg-muted/30"
                       >
-                        {playingIdx === i ? (
-                          <Pause className="size-4" weight="fill" />
-                        ) : (
-                          <Play className="size-4" weight="fill" />
-                        )}
-                      </Button>
-                      <div className="min-w-0 flex-1">
-                        <p className="line-clamp-2 text-xs leading-relaxed">{r.text}</p>
-                        {r.time !== null && (
-                          <span className="text-[10px] text-muted-foreground">
-                            {r.time.toFixed(2)}s
-                          </span>
-                        )}
-                      </div>
-                      <a href={r.url} download="output.wav">
                         <Button
                           variant="ghost"
                           size="icon-sm"
-                          className="opacity-0 transition-opacity group-hover:opacity-100"
-                          asChild
+                          onClick={() => togglePlay(i)}
+                          className="shrink-0"
                         >
-                          <span>
-                            <DownloadSimple className="size-3.5" />
-                          </span>
+                          {playingIdx === i ? (
+                            <Pause className="size-4" weight="fill" />
+                          ) : (
+                            <Play className="size-4" weight="fill" />
+                          )}
                         </Button>
-                      </a>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => removeResult(i)}
-                        className="opacity-0 transition-opacity group-hover:opacity-100"
-                      >
-                        <X className="size-3.5" />
-                      </Button>
-                      <audio
-                        ref={(el) => {
-                          if (el) audioRefs.current.set(i, el)
-                          else audioRefs.current.delete(i)
-                        }}
-                        src={r.url}
-                        preload="auto"
-                      />
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-6">
+                        <div className="min-w-0 flex-1">
+                          <p className="line-clamp-2 text-xs leading-relaxed">{r.text}</p>
+                          {r.time !== null && (
+                            <span className="text-[10px] text-muted-foreground">
+                              {r.time.toFixed(2)}s
+                            </span>
+                          )}
+                        </div>
+                        <a href={r.url} download="output.wav">
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            className="opacity-0 transition-opacity group-hover:opacity-100"
+                            asChild
+                          >
+                            <span>
+                              <DownloadSimple className="size-3.5" />
+                            </span>
+                          </Button>
+                        </a>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => removeResult(i)}
+                          className="opacity-0 transition-opacity group-hover:opacity-100"
+                        >
+                          <X className="size-3.5" />
+                        </Button>
+                        <audio
+                          ref={(el) => {
+                            if (el) audioRefs.current.set(i, el)
+                            else audioRefs.current.delete(i)
+                          }}
+                          src={r.url}
+                          preload="auto"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
