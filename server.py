@@ -69,7 +69,6 @@ async def status():
 @app.post("/api/prompt/upload")
 async def upload_prompt(
     file: UploadFile = File(...),
-    duration: float = Form(5.0),
     rms: float = Form(0.01),
     name: str = Form(""),
     prompt_text: str = Form(...),
@@ -85,7 +84,8 @@ async def upload_prompt(
         tmp.flush()
         tmp.close()
 
-        encoded = tts.encode_prompt(tmp.name, duration=duration, rms=rms, prompt_text=prompt_text)
+        print(f"[DEBUG] upload_prompt: prompt_text='{prompt_text[:80]}...', rms={rms}")
+        encoded = tts.encode_prompt(tmp.name, rms=rms, prompt_text=prompt_text)
         prompt_id = uuid.uuid4().hex[:12]
         label = name.strip() or file.filename or prompt_id
         prompts[prompt_id] = {"encoded": encoded, "name": label}
@@ -116,7 +116,6 @@ async def text_to_speech(
     t_shift: float = Form(0.5),
     speed: float = Form(1.0),
     return_smooth: bool = Form(False),
-    ref_duration: float = Form(5.0),
 ):
     if tts is None:
         raise HTTPException(503, "Model not loaded")
@@ -168,7 +167,6 @@ async def list_samples():
 @app.post("/api/prompt/sample")
 async def upload_sample(
     file: str = Form(...),
-    duration: float = Form(5.0),
     rms: float = Form(0.01),
     name: str = Form(""),
     prompt_text: str = Form(...),
@@ -178,7 +176,8 @@ async def upload_sample(
     path = SAMPLES_DIR / file
     if not path.is_file() or not path.resolve().is_relative_to(SAMPLES_DIR.resolve()):
         raise HTTPException(404, "Sample not found")
-    encoded = tts.encode_prompt(str(path), duration=duration, rms=rms, prompt_text=prompt_text)
+    print(f"[DEBUG] upload_sample: file={file}, prompt_text='{prompt_text[:80]}...', rms={rms}")
+    encoded = tts.encode_prompt(str(path), rms=rms, prompt_text=prompt_text)
     prompt_id = uuid.uuid4().hex[:12]
     label = name.strip() or path.stem.replace("_", " ").title()
     prompts[prompt_id] = {"encoded": encoded, "name": label}

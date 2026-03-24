@@ -44,7 +44,7 @@ class LuxTTSConfig:
 
 
 @torch.inference_mode
-def process_audio(audio, transcriber, tokenizer, feature_extractor, device, target_rms=0.1, duration=4, feat_scale=0.1, prompt_text=None):
+def process_audio(audio, transcriber, tokenizer, feature_extractor, device, target_rms=0.1, duration=None, feat_scale=0.1, prompt_text=None):
     prompt_wav, sr = librosa.load(audio, sr=24000, duration=duration)
     if not prompt_text or not prompt_text.strip():
         if transcriber is not None:

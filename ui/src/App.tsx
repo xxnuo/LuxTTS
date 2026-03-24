@@ -152,7 +152,6 @@ function AppContent({
   const [tShift, setTShift] = useState(0.5)
   const [speed, setSpeed] = useState(1.0)
   const [returnSmooth, setReturnSmooth] = useState(false)
-  const [refDuration, setRefDuration] = useState(5)
   const [promptRms, setPromptRms] = useState(0.01)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -210,7 +209,6 @@ function AppContent({
     try {
       const audioUrl = URL.createObjectURL(file)
       const result = await uploadPrompt(file, {
-        duration: refDuration,
         rms: promptRms,
         name: file.name.replace(/\.[^.]+$/, ""),
         prompt_text: promptText,
@@ -231,7 +229,6 @@ function AppContent({
     setPromptText(script)
     try {
       const result = await uploadSample(sample.file, {
-        duration: refDuration,
         rms: promptRms,
         name: sample.name,
         prompt_text: script,
@@ -278,7 +275,6 @@ function AppContent({
         t_shift: tShift,
         speed,
         return_smooth: returnSmooth,
-        ref_duration: refDuration,
       }
       const { blob, generationTime } = await generateSpeech(params)
       const url = URL.createObjectURL(blob)
@@ -424,6 +420,16 @@ function AppContent({
                 <CardDescription>{t("voicePromptDesc")}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">{t("promptTextLabel")}</Label>
+                  <Textarea
+                    placeholder={t("promptTextPlaceholder")}
+                    className="min-h-16 resize-none text-xs"
+                    value={promptText}
+                    onChange={(e) => setPromptText(e.target.value)}
+                  />
+                </div>
+
                 <div
                   role="button"
                   tabIndex={0}
@@ -553,15 +559,6 @@ function AppContent({
                           <Trash className="size-3.5" />
                         </Button>
                       )}
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">{t("promptTextLabel")}</Label>
-                      <Textarea
-                        placeholder={t("promptTextPlaceholder")}
-                        className="min-h-16 resize-none text-xs"
-                        value={promptText}
-                        onChange={(e) => setPromptText(e.target.value)}
-                      />
                     </div>
                   </div>
                 )}
@@ -730,15 +727,7 @@ function AppContent({
                   step={0.05}
                   onChange={setSpeed}
                 />
-                <ParamSlider
-                  label={t("refDuration")}
-                  value={refDuration}
-                  min={1}
-                  max={30}
-                  step={1}
-                  onChange={setRefDuration}
-                  unit="s"
-                />
+
 
                 <div className="flex items-center justify-between">
                   <Label htmlFor="smooth-switch" className="text-xs">
