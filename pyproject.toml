@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "cn2an",
+  "fastapi[standard]",
   "huggingface-hub",
   "inflect",
   "jieba",
@@ -19,6 +20,7 @@ dependencies = [
   "pypinyin",
   "safetensors",
   "setuptools<81",
+  "soundfile",
   "tensorboard",
   "torch",
   "torchaudio",
@@ -40,9 +42,30 @@ line-length = 120
 
 [tool.uv]
 find-links = ["https://k2-fsa.github.io/icefall/piper_phonemize.html"]
+required-environments = [
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
 
 [tool.uv.sources]
 linacodec = { git = "https://github.com/ysharma3501/LinaCodec.git" }
+torch = [
+  { index = "pytorch-cu126", marker = "sys_platform == 'linux'" },
+  { index = "pypi", marker = "sys_platform == 'darwin'" },
+]
+torchaudio = [
+  { index = "pytorch-cu126", marker = "sys_platform == 'linux'" },
+  { index = "pypi", marker = "sys_platform == 'darwin'" },
+]
 
 [tool.uv.build-backend]
-module-root = "" # The root module of the project
+module-root = ""
