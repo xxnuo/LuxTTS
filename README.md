@@ -107,6 +107,18 @@ sf.write('output.wav', final_wav, 48000)
 if display is not None:
   display(Audio(final_wav, rate=48000))
 ```
+## Parameters
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `num_steps` | 4 | 1–16 | Number of sampling steps. Higher values produce better quality but take longer. 3–4 is best for efficiency. |
+| `t_shift` | 0.5 | 0.1–1.0 | Sampling temperature shift. Higher values can sound better but may increase pronunciation errors (worse WER). |
+| `speed` | 1.0 | 0.5–2.0 | Controls the speed of generated audio. Lower = slower speech, higher = faster speech. |
+| `return_smooth` | False | True/False | Enables smoother output that may reduce metallic artifacts, but can sound less clean. |
+| `guidance_scale` | 3.0 | 1.0–10.0 | Classifier-free guidance scale. Higher values increase adherence to the prompt but may reduce naturalness. |
+| `rms` | 0.01 | 0.001–0.1 | Target RMS volume for the reference audio normalization. Higher values produce louder output. 0.01 recommended. |
+| `prompt_text` | — | — | Transcript of the reference audio. Must accurately match what is spoken in the reference audio. |
+
 ## Tips
 - Please use at minimum a 3 second audio file for voice cloning.
 - You can use return_smooth = True if you hear metallic sounds.
